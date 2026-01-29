@@ -1,18 +1,9 @@
 import os
-
-from pydantic import SecretStr
 from .state import ScanState
 from tools.sast_tool import SemgrepScanner
 from tools.sca_tool import SnykScanner
-from dotenv import load_dotenv
-load_dotenv()
-from langchain_openai import ChatOpenAI
-from .schemas.security import (
-    SecurityIssue,
-    LLMAnalysisResult
-)
+from .schemas.llm_analyzer import analyze_with_llm
 from typing import List, Dict, Any
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 #========================= Node 1: COORDINATOR ===========================
@@ -106,7 +97,8 @@ def aggregator_node(state: ScanState) -> Dict[str, Any]:
     llm_analysis = analyze_with_llm(
         sast_results=sast_results,
         sca_results=sca_results,
-        total_files=state['total_files']
+        total_files=state['total_files'],
+        project_path=state['project_path']
     )
 
     final_report = {
@@ -125,103 +117,3 @@ def aggregator_node(state: ScanState) -> Dict[str, Any]:
         "final_report": final_report,
         "scan_status": ["completed"]
     }
-
-
-def analyze_with_llm(sast_results: Dict, sca_results: Dict, total_files: int): 
-    llm = ChatOpenAI( 
-        model = "gpt-5.2",
-        temperature=0.1,
-        api_key= SecretStr(OPENAI_API_KEY) if OPENAI_API_KEY else None
-
-    ).with_structured_output(LLMAnalysisResult)
-    # Extract vulnerabilities (limit to avoid token overflow)
-    sast_vulns = sast_results.get('vulnerabilities', [])[:20]
-    sca_vulns = sca_results.get('vulnerabilities', [])[:20]
-
-    sast_summary = format_sast_findings(sast_vulns, project_path)
-    sca_summary = format_sca_findings(sca_vulns, project_path)
-
-    # Construct detailed prompt
-    prompt = f"""You are a senior Application Security Engineer analyzing security scan results.
-
-📋 SCAN CONTEXT:
-- Total files scanned: {total_files}
-- SAST findings: {len(sast_vulns)} issues detected
-- SCA findings: {len(sca_vulns)} issues detected
-
-🔍 SAST FINDINGS (Semgrep):
-{sast_summary}
-
-📦 SCA FINDINGS (Snyk):
-{sca_summary}
-
-🎯 YOUR TASK:
-1. Convert raw findings into structured SecurityIssue objects
-2. Deduplicate similar issues across tools
-3. Fill in code locations (file_path, line numbers) when available
-4. Provide actionable fix suggestions
-5. Determine overall project risk level (Critical/High/Medium/Low)
-6. Prioritize remediation steps
-
-⚠️ IMPORTANT RULES:
-- Only include line numbers if they exist in the raw data
-- For fix suggestions, provide concrete code patches when possible
-- Prioritize by: exploitability > impact > ease of fix
-- Overall risk should reflect the most severe issue found
-- Remediation priority should list 3-5 actionable steps
-
-Return structured analysis following the LLMAnalysisResult schema.
-"""
-    try:
-        analysis = llm.invoke(prompt)
-        
-        print(f"\n✅ LLM Analysis completed:")
-        print(f"   - Unified {len(analysis.issues)} security issues") # type: ignore
-        print(f"   - Overall risk: {analysis.overall_risk}")    # type: ignore
-        print(f"   - {len(analysis.remediation_priority)} priority actions") # type: ignore
-        
-        return analysis # type: ignore
-        
-    except Exception as e:
-        print(f"\n❌ LLM Analysis failed: {e}")
-        
-def format_sast_findings(vulnerabilities: List[Dict]) -> str:
-    if not vulnerabilities:
-        return "No SAST issues found."
-    
-    formatted = []
-    for idx, vuln in enumerate(vulnerabilities, 1):
-        entry = f"{idx}. {vuln.get('check_id', 'Unknown')}"
-        entry += f"\n   Severity: {vuln.get('severity', 'N/A')}"
-        entry += f"\n   Message: {vuln.get('message', 'N/A')}"
-        
-        if 'path' in vuln:
-            entry += f"\n   File: {vuln['path']}"
-        if 'line' in vuln:
-            entry += f"\n   Line: {vuln['line']}"
-            
-        formatted.append(entry)
-    
-    return "\n\n".join(formatted)
-
-
-def format_sca_findings(vulnerabilities: List[Dict]) -> str:
-    if not vulnerabilities:
-        return "No SCA issues found."
-    
-    formatted = []
-    for idx, vuln in enumerate(vulnerabilities, 1):
-        entry = f"{idx}. {vuln.get('title', 'Unknown vulnerability')}"
-        entry += f"\n   Severity: {vuln.get('severity', 'N/A')}"
-        entry += f"\n   Package: {vuln.get('package', 'N/A')}"
-        entry += f"\n   Version: {vuln.get('version', 'N/A')}"
-        
-        if 'fixed_in' in vuln:
-            entry += f"\n   Fix: Upgrade to {vuln['fixed_in']}"
-            
-        formatted.append(entry)
-    
-    return "\n\n".join(formatted)
-
-
-    
