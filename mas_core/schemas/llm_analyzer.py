@@ -3,7 +3,8 @@ from typing import Dict, List
 from pydantic import SecretStr
 from langchain_openai import ChatOpenAI
 from .security import LLMAnalysisResult
-
+from dotenv import load_dotenv
+load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 def analyze_with_llm(sast_results: Dict, sca_results: Dict, total_files: int,  project_path: str): 
@@ -17,24 +18,23 @@ def analyze_with_llm(sast_results: Dict, sca_results: Dict, total_files: int,  p
     sast_vulns = sast_results.get('vulnerabilities', [])[:15] 
     sca_vulns = sca_results.get('vulnerabilities', [])[:15]
 
-    # Enhanced formatting with code snippets
     sast_summary = format_sast_findings_with_code(sast_vulns, project_path)
     sca_summary = format_sca_findings(sca_vulns)
 
     prompt = f"""You are a senior Application Security Engineer. Your job is to provide ACTIONABLE, DETAILED security fixes.
 
-📋 SCAN CONTEXT:
+SCAN CONTEXT:
 - Total files scanned: {total_files}
 - SAST findings: {len(sast_vulns)} code vulnerabilities
 - SCA findings: {len(sca_vulns)} dependency issues
 
-🔍 SAST FINDINGS (with code context):
+SAST FINDINGS (with code context):
 {sast_summary}
 
-📦 SCA FINDINGS:
+SCA FINDINGS:
 {sca_summary}
 
-🎯 YOUR MISSION:
+YOUR MISSION:
 For EACH finding, you must:
 
 1. **Extract exact location**: Use file_path and line numbers FROM THE RAW DATA ABOVE
@@ -99,10 +99,10 @@ NOW ANALYZE THE FINDINGS ABOVE AND RETURN STRUCTURED SecurityIssue OBJECTS WITH 
         if issues_with_patches:
             print(f"   - {len(issues_with_patches)} issues have code patches")
         
-        return analysis # type: ignore
+        return analysis 
         
     except Exception as e:
-        print(f"\n❌ LLM Analysis failed: {e}")
+        print(f"\nLLM Analysis failed: {e}")
         raise
 
 
