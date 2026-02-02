@@ -38,7 +38,7 @@ class SnykScanner:
             
             cmd = [
                 'snyk', 'test',
-                f'---file=requirements.txt',
+                f'--file={req_file}',
                 '--json',
                 '--package-manager=pip'
             ]
