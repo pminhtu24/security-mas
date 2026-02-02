@@ -1,15 +1,20 @@
 # Security Scanner MAS
 
-A **Multi-Agent System (MAS)** for security scanning that combines **SAST** (Static Application Security Testing) and **SCA** (Software Composition Analysis) with parallel execution and AI-powered aggregation. Built with [LangGraph](https://github.com/langchain-ai/langgraph) for workflow orchestration.
+A **Multi‑Agent System (MAS)** for application security scanning that combines:
 
-## Features
+- **SAST** (Static Application Security Testing) via **Semgrep**
+- **SCA** (Software Composition Analysis) via **Snyk**
+- **LLM aggregation** to unify findings and generate actionable fixes (including unified-diff patches when possible)
 
-- **Coordinator** – Discovers project files to scan (Python, JS/TS, Java, PHP, Go, Ruby, etc.)
-- **SAST worker** – Runs [Semgrep](https://semgrep.dev/) for code vulnerability detection
-- **SCA worker** – Runs [Snyk](https://snyk.io/) for dependency vulnerability scanning
-- **Parallel execution** – SAST and SCA run concurrently after the coordinator
-- **Aggregator** – Uses an LLM to unify findings, assign risk levels, and produce actionable fixes (including unified-diff patches where applicable)
-- **Structured report** – JSON output with summary, per-issue details, and remediation priority
+Workflow orchestration is implemented with [LangGraph](https://github.com/langchain-ai/langgraph).
+
+## What it does
+
+- **Coordinator**: discovers source files to scan (multi-language)
+- **SAST worker**: runs Semgrep over discovered files
+- **SCA worker**: runs Snyk over Python dependencies (`requirements.txt`)
+- **Aggregator**: calls an LLM to deduplicate findings, assign risk levels, and produce fixes
+- **Output**: a single JSON report (default `results/report.json`)
 
 ## Architecture
 
@@ -29,55 +34,49 @@ A **Multi-Agent System (MAS)** for security scanning that combines **SAST** (Sta
               └──────────────┬──────────────┘
                              ▼
                     ┌─────────────────┐
-                    │   AGGREGATOR     │
+                    │   AGGREGATOR    │
                     │ (LLM analysis)  │
                     └────────┬────────┘
                              ▼
                          [Report]
 ```
 
-## Prerequisites
+## Requirements
 
-- **Python 3.10+**
-- **Semgrep** – [Install](https://semgrep.dev/docs/getting-started/installation/) and ensure `semgrep` is on your `PATH`
-- **Snyk** – [Install](https://docs.snyk.io/snyk-cli/install-the-snyk-cli) and [authenticate](https://docs.snyk.io/snyk-cli/authenticate-the-cli-with-your-account) (`snyk test` must work)
-- **OpenAI API key** – Used by the aggregator LLM. Set `OPENAI_API_KEY` in your environment or in a `.env` file.
+- **Python 3.11+** (see `pyproject.toml`)
+- **Semgrep CLI** available on `PATH` (`semgrep --version`)
+- **Snyk CLI** available on `PATH` and authenticated (`snyk auth`, then `snyk test` works)
+- **OpenAI API key** for the aggregator: set `OPENAI_API_KEY` (env var or `.env` file)
 
 ## Installation
 
-1. Clone the repository and enter the project directory:
+This repo includes `uv.lock`, so the simplest setup is with [uv](https://github.com/astral-sh/uv).
 
-   ```bash
-   cd security-mas
-   ```
+### Option A: Install with uv (recommended)
 
-2. Create a virtual environment and install dependencies:
+```bash
+uv sync --group dev
+```
 
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate   # Linux/macOS
-   # or:  .venv\Scripts\activate   # Windows
-   ```
+### Option B: Install with pip
 
-3. Install from the lock file (if you use [uv](https://github.com/astral-sh/uv)):
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e .
+pip install -r test_project/requirements.txt  # optional, only if you want a local scan target
+```
 
-   ```bash
-   uv pip sync requirements.lock
-   ```
+### Environment variables
 
-   Or install core dependencies manually:
+Create a `.env` file in the repo root (optional):
 
-   ```bash
-   pip install langchain langgraph langchain-openai pydantic python-dotenv semgrep
-   ```
+```env
+OPENAI_API_KEY=your_key_here
+```
 
-4. Create a `.env` file in the project root (optional but recommended):
-
-   ```env
-   OPENAI_API_KEY=sk-your-openai-api-key
-   ```
-
-## Usage
+## Usage (CLI)
 
 Scan a project directory and write the report to the default path `results/report.json`:
 
@@ -85,67 +84,91 @@ Scan a project directory and write the report to the default path `results/repor
 python main.py --project /path/to/your/project
 ```
 
-Specify a custom report path:
+Write to a custom output path:
 
 ```bash
 python main.py --project /path/to/your/project --output results/my_report.json
 ```
 
-Example with the included test project:
+Run against the included intentionally-vulnerable sample project:
 
 ```bash
 python main.py --project test_project --output results/report.json
 ```
 
-After the run, the console prints a summary (total files, SAST/SCA issue counts, total vulnerabilities), and the full report is saved as JSON.
+## Usage (API)
+
+Start the FastAPI server:
+
+```bash
+uvicorn api_server.api_server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Endpoints:
+
+- `GET /health`: health status
+- `POST /scan`: upload a ZIP codebase and start a background scan
+- `GET /scan/{scan_id}`: poll status and fetch results
+
+Example scan request (ZIP upload):
+
+```bash
+curl -X POST "http://localhost:8000/scan?project_name=my-project" \
+  -F "codebase=@/path/to/project.zip"
+```
+
+Poll for results:
+
+```bash
+curl "http://localhost:8000/scan/<scan_id>"
+```
 
 ## Report format
 
 The output JSON contains:
 
-| Field                  | Description                                                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `summary`              | `total_files_scanned`, `sast_issues`, `sca_issues`, `total_issues`, `overall_risk`                                 |
-| `issues`               | List of unified security issues: `tool`, `risk_level`, `message`, `location`, `fix` (description + optional patch) |
-| `remediation_priority` | Ordered list of 3–5 concrete remediation steps                                                                     |
+| Field                  | Description                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `summary`              | `total_files_scanned`, `sast_issues`, `sca_issues`, `total_issues`, `overall_risk`                                          |
+| `issues`               | Unified issues with `tool`, `risk_level`, `message`, optional `location`, and optional `fix` (description + optional patch) |
+| `remediation_priority` | Ordered list of 3–5 concrete remediation steps                                                                              |
+
+## Scanning behavior
+
+### SAST (Semgrep)
+
+- **File discovery**: `.py`, `.js`, `.jsx`, `.ts`, `.tsx`, `.java`, `.php`, `.go`, `.rb`
+- **Ignored dirs**: `node_modules`, `.git`, `venv`, `.venv`, `__pycache__`, `build`, `dist`
+- **Execution**: Semgrep runs with `--config auto` and returns JSON results
+
+### SCA (Snyk)
+
+- **Python only (current implementation)**: searches for `requirements.txt` under the target project
+- **Execution**: runs `snyk test --json --package-manager=pip --file=<requirements.txt>`
 
 ## Project structure
 
 ```
 security-mas/
-├── main.py                 # CLI entrypoint
+├── main.py                    # CLI entrypoint
+├── api_server/
+│   └── api_server.py          # FastAPI service (zip upload + background scan)
 ├── mas_core/
-│   ├── graph.py            # LangGraph workflow (nodes + edges)
-│   ├── nodes.py            # Coordinator, SAST worker, SCA worker, Aggregator
-│   ├── state.py            # ScanState TypedDict
+│   ├── graph.py               # LangGraph workflow
+│   ├── nodes.py               # Coordinator, SAST worker, SCA worker, Aggregator
+│   ├── state.py               # Scan state definition
 │   └── schemas/
-│       ├── security.py     # Pydantic models (SecurityIssue, LLMAnalysisResult, etc.)
-│       └── llm_analyzer.py # LLM invocation and SAST/SCA formatting
+│       ├── security.py        # Pydantic models (SecurityIssue, LLMAnalysisResult, ...)
+│       └── llm_analyzer.py    # LLM prompt + findings formatting
 ├── tools/
-│   ├── sast_tool.py        # Semgrep wrapper
-│   └── sca_tool.py         # Snyk wrapper (pip/requirements.txt)
-├── test_project/           # Sample project with intentional vulnerabilities
-├── results/                # Default directory for report.json
-├── requirements.lock
-└── README.md
+│   ├── sast_tool.py           # Semgrep wrapper
+│   └── sca_tool.py            # Snyk wrapper
+├── test_project/              # Sample project with intentional vulnerabilities
+├── results/                   # Default output directory
+└── uv.lock
 ```
 
-## Test project
+## Notes / limitations
 
-The `test_project/` directory contains sample files with intentional issues (e.g. SQL injection, XSS, insecure pickle, path traversal, hardcoded secrets) and a `requirements.txt` with outdated dependencies. Use it to verify the scanner and report format:
-
-```bash
-python main.py --project test_project
-```
-
-## Supported languages (SAST)
-
-File discovery includes: `.py`, `.js`, `.jsx`, `.ts`, `.tsx`, `.java`, `.php`, `.go`, `.rb`. Directories such as `node_modules`, `.git`, `venv`, `__pycache__`, `build`, `dist` are skipped.
-
-## SCA (dependencies)
-
-Snyk is run for **Python** projects: the tool looks for `requirements.txt` in the project root or under subdirectories and runs `snyk test` with `--package-manager=pip`. Other ecosystems can be added by extending `tools/sca_tool.py`.
-
-## License
-
-See the repository for license information.
+- The aggregator currently samples up to **15 SAST** and **15 SCA** findings for LLM analysis (see `mas_core/schemas/llm_analyzer.py`).
+- Semgrep/Snyk timeouts are currently **60s** each (see `tools/sast_tool.py` and `tools/sca_tool.py`).
